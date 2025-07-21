@@ -1,0 +1,23 @@
+# Ignore node_modules for frontend
+/frontend/node_modules
+/frontend/.next
+
+# Ignore Laravel vendor folder and environment file
+/back-end/vendor
+/back-end/.env
+
+# Ignore logs and cache for Laravel
+/back-end/storage/logs
+/back-end/storage/framework/cache
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE/editor folders
+.vscode
+.idea
+
+# Ignore any other .env files anywhere
+**/.env
+node_modules/

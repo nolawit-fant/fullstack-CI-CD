@@ -1,0 +1,41 @@
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+    container_name: app  # Renamed for clarity
+    working_dir: /var/www
+    volumes:
+      - .:/var/www
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    command: php artisan serve --host=0.0.0.0 --port=8000
+
+  frontend:
+    build:
+      context: ../front-end
+    container_name: next_frontend
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://app:8000
+    depends_on:
+      - app
+
+  db:
+    image: mysql:8.0
+    container_name: laravel_db
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_DATABASE: myDB
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
