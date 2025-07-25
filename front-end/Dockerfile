@@ -2,7 +2,7 @@ FROM node:18
 
 WORKDIR /app
 
-# Accept build-time env variables
+# Accept build-time env variable
 ARG APP_NAME
 ARG SECRET_COOKIE_PASSWORD
 ARG NEXT_PUBLIC_BACKEND_URL
