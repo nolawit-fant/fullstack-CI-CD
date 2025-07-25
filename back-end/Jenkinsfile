@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+
+    environment {
+        COMPOSE_PROJECT_NAME = "ci-cd-test"
+        BACKEND_DIR = "backend"
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
+            }
+        }
+
+        stage('Start Services with Docker Compose') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    sh 'docker-compose down || true'
+                    sh 'docker-compose up -d --build'
+                }
+            }
+        }
+
+        stage('Wait for MySQL to be Ready') {
+            steps {
+                script {
+                    echo "Waiting for MySQL to be ready..."
+                    sh '''
+                        for i in {1..30}; do
+                            docker exec app bash -c 'mysqladmin ping -h db --silent'
+                            if [ $? -eq 0 ]; then
+                                echo "MySQL is up!"
+                                break
+                            fi
+                            echo "Waiting... ($i)"
+                            sleep 2
+                        done
+                    '''
+                }
+            }
+        }
+
+        stage('Run Laravel Setup') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    sh '''
+                        docker exec app cp .env.example .env
+                        docker exec app php artisan key:generate
+                        docker exec app php artisan migrate --force
+                    '''
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    sh 'docker exec app ./vendor/bin/phpunit'
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            dir("${BACKEND_DIR}") {
+                sh 'docker-compose down'
+            }
+        }
+    }
+}
