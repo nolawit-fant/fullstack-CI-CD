@@ -1,22 +1,22 @@
-# Use official Node.js image
 FROM node:18
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Accept build-time env variables
+ARG APP_NAME
+ARG SECRET_COOKIE_PASSWORD
+ARG NEXT_PUBLIC_BACKEND_URL
+
+ENV APP_NAME=$APP_NAME
+ENV SECRET_COOKIE_PASSWORD=$SECRET_COOKIE_PASSWORD
+ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
+
 COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
-
-# Copy the rest of your app
 COPY . .
 
-# Build the Next.js app
 RUN npm run build
 
-# Expose the app port and start
 EXPOSE 3000
 CMD ["npm", "start"]
-
-
