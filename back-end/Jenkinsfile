@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         COMPOSE_PROJECT_NAME = "ci-cd-test"
-        BACKEND_DIR = "backend"
+        BACKEND_DIR = "back-end"
     }
 
     stages {
