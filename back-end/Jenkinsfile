@@ -1,9 +1,11 @@
+
 pipeline {
     agent any
 
     environment {
+        COMPOSE_PROJECT_NAME = "ci-cd-test"
         BACKEND_DIR = "back-end"
-        COMPOSE_PROJECT_NAME = "backend_ci"
+        COMPOSE_FILE = "docker-compose.ci.yml"  // Temporary file for CI
     }
 
     stages {
@@ -13,11 +15,34 @@ pipeline {
             }
         }
 
+        stage('Prepare CI Docker Compose') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    sh '''
+                        # Copy original docker-compose.yml to temporary file
+                        cp docker-compose.yml ${COMPOSE_FILE}
+
+                        # Remove frontend service block from temporary file
+                        awk '
+                            BEGIN { skip=0 }
+                            /^  frontend:/ { skip=1; next }
+                            skip && /^  [^ ]/ { skip=0 }
+                            !skip { print }
+                        ' docker-compose.yml > temp.yml && mv temp.yml ${COMPOSE_FILE}
+
+                        # Replace container names with prefixed names in temporary file
+                        sed -i 's/container_name: app/container_name: backend_ci_app/' ${COMPOSE_FILE}
+                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' ${COMPOSE_FILE}
+                    '''
+                }
+            }
+        }
+
         stage('Start Services with Docker Compose') {
             steps {
                 dir("${BACKEND_DIR}") {
-                    sh 'docker-compose -p ${COMPOSE_PROJECT_NAME} down || true'
-                    sh 'docker-compose -p ${COMPOSE_PROJECT_NAME} up -d --build'
+                    sh "docker-compose -f ${COMPOSE_FILE} down || true"
+                    sh "docker-compose -f ${COMPOSE_FILE} up -d --build"
                 }
             }
         }
@@ -28,7 +53,7 @@ pipeline {
                     echo "Waiting for MySQL to be ready..."
                     sh '''
                         for i in {1..30}; do
-                            docker exec ${COMPOSE_PROJECT_NAME}_app_1 bash -c 'mysqladmin ping -h db --silent'
+                            docker exec backend_ci_app bash -c 'mysqladmin ping -h backend_ci_laravel_db --silent'
                             if [ $? -eq 0 ]; then
                                 echo "MySQL is up!"
                                 break
@@ -45,9 +70,9 @@ pipeline {
             steps {
                 dir("${BACKEND_DIR}") {
                     sh '''
-                        docker exec ${COMPOSE_PROJECT_NAME}_app_1 cp .env.example .env || true
-                        docker exec ${COMPOSE_PROJECT_NAME}_app_1 php artisan key:generate
-                        docker exec ${COMPOSE_PROJECT_NAME}_app_1 php artisan migrate --force
+                        docker exec backend_ci_app cp .env.example .env || true
+                        docker exec backend_ci_app php artisan key:generate
+                        docker exec backend_ci_app php artisan migrate --force
                     '''
                 }
             }
@@ -56,7 +81,7 @@ pipeline {
         stage('Run Tests') {
             steps {
                 dir("${BACKEND_DIR}") {
-                    sh 'docker exec ${COMPOSE_PROJECT_NAME}_app_1 ./vendor/bin/phpunit'
+                    sh "docker exec backend_ci_app ./vendor/bin/phpunit"
                 }
             }
         }
@@ -65,7 +90,7 @@ pipeline {
     post {
         always {
             dir("${BACKEND_DIR}") {
-                sh 'docker-compose -p ${COMPOSE_PROJECT_NAME} down'
+                sh "docker-compose -f ${COMPOSE_FILE} down"
             }
         }
     }
