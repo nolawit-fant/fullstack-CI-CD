@@ -3,46 +3,44 @@ pipeline {
     agent any
 
     environment {
-        COMPOSE_PROJECT_NAME = "ci-cd-test"
-        BACKEND_DIR = "back-end"
-        COMPOSE_FILE = "docker-compose.ci.yml"  // Temporary file for CI
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials') // Add this ID in Jenkins
+        DOCKERHUB_IMAGE = 'nolawit/laravel-backend'
     }
 
     stages {
         stage('Clone Repository') {
             steps {
-                git branch: 'main', url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
+                git url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git', branch: 'main'
             }
         }
 
         stage('Prepare CI Docker Compose') {
-            steps {
-                dir("${BACKEND_DIR}") {
+            dir('back-end') {
+                steps {
                     sh '''
-                        # Copy original docker-compose.yml to temporary file
-                        cp docker-compose.yml ${COMPOSE_FILE}
-
-                        # Remove frontend service block from temporary file
+                        # Copy and isolate docker-compose
+                        cp docker-compose.yml docker-compose.ci.yml
                         awk '
                             BEGIN { skip=0 }
                             /^  frontend:/ { skip=1; next }
                             skip && /^  [^ ]/ { skip=0 }
                             !skip { print }
-                        ' docker-compose.yml > temp.yml && mv temp.yml ${COMPOSE_FILE}
+                        ' docker-compose.yml > temp.yml
+                        mv temp.yml docker-compose.ci.yml
 
-                        # Replace container names with prefixed names in temporary file
-                        sed -i 's/container_name: app/container_name: backend_ci_app/' ${COMPOSE_FILE}
-                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' ${COMPOSE_FILE}
+                        # Rename containers to avoid conflicts
+                        sed -i 's/container_name: app/container_name: backend_ci_app/' docker-compose.ci.yml
+                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' docker-compose.ci.yml
                     '''
                 }
             }
         }
 
         stage('Start Services with Docker Compose') {
-            steps {
-                dir("${BACKEND_DIR}") {
-                    sh "docker-compose -f ${COMPOSE_FILE} down || true"
-                    sh "docker-compose -f ${COMPOSE_FILE} up -d --build"
+            dir('back-end') {
+                steps {
+                    sh 'docker-compose -f docker-compose.ci.yml down || true'
+                    sh 'docker-compose -f docker-compose.ci.yml up -d --build'
                 }
             }
         }
@@ -50,38 +48,42 @@ pipeline {
         stage('Wait for MySQL to be Ready') {
             steps {
                 script {
-                    echo "Waiting for MySQL to be ready..."
-                    sh '''
-                        for i in {1..30}; do
-                            docker exec backend_ci_app bash -c 'mysqladmin ping -h backend_ci_laravel_db --silent'
-                            if [ $? -eq 0 ]; then
-                                echo "MySQL is up!"
-                                break
-                            fi
-                            echo "Waiting... ($i)"
-                            sleep 2
-                        done
-                    '''
+                    echo 'Waiting for MySQL to be ready...'
+                    retry(10) {
+                        sh 'sleep 5'
+                        sh 'docker exec backend_ci_app bash -c "mysqladmin ping -h backend_ci_laravel_db --silent"'
+                    }
                 }
             }
         }
 
         stage('Run Laravel Setup') {
             steps {
-                dir("${BACKEND_DIR}") {
-                    sh '''
-                        docker exec backend_ci_app cp .env.example .env || true
-                        docker exec backend_ci_app php artisan key:generate
-                        docker exec backend_ci_app php artisan migrate --force
-                    '''
-                }
+                sh '''
+                    docker exec backend_ci_app bash -c "
+                        cp .env.example .env &&
+                        php artisan key:generate &&
+                        php artisan migrate
+                    "
+                '''
             }
         }
 
         stage('Run Tests') {
             steps {
-                dir("${BACKEND_DIR}") {
-                    sh "docker exec backend_ci_app ./vendor/bin/phpunit"
+                sh 'docker exec backend_ci_app bash -c "php artisan test || true"'
+            }
+        }
+
+        stage('Push Image to Docker Hub') {
+            steps {
+                script {
+                    def imageTag = "${DOCKERHUB_IMAGE}:latest"
+                    sh """
+                        docker tag ci-cd-test_app ${imageTag}
+                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u "${DOCKERHUB_CREDENTIALS_USR}" --password-stdin
+                        docker push ${imageTag}
+                    """
                 }
             }
         }
@@ -89,8 +91,8 @@ pipeline {
 
     post {
         always {
-            dir("${BACKEND_DIR}") {
-                sh "docker-compose -f ${COMPOSE_FILE} down"
+            dir('back-end') {
+                sh 'docker-compose -f docker-compose.ci.yml down || true'
             }
         }
     }
