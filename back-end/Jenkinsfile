@@ -4,8 +4,7 @@ pipeline {
 
     environment {
         DOCKER_IMAGE = 'nolawit/project-backend:latest'
-        DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials' // Your Jenkins Docker Hub credentials ID
-        CONTAINER_NAME = 'backend-app'             // Name of the container to run locally
+        DOCKER_HUB_CREDENTIALS = 'docker-hub-creds' // Jenkins credential ID for Docker Hub
     }
 
     stages {
@@ -17,8 +16,10 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    docker.build("${DOCKER_IMAGE}", ".")
+                dir('back-end') {
+                    script {
+                        docker.build("${DOCKER_IMAGE}", ".")
+                    }
                 }
             }
         }
@@ -26,13 +27,7 @@ pipeline {
         stage('Push to Docker Hub') {
             steps {
                 script {
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: "${DOCKER_HUB_CREDENTIALS}",
-                            usernameVariable: 'DOCKER_USER',
-                            passwordVariable: 'DOCKER_PASS'
-                        )
-                    ]) {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
                         sh "docker push ${DOCKER_IMAGE}"
                     }
@@ -42,22 +37,9 @@ pipeline {
 
         stage('Deploy Locally') {
             steps {
-                script {
-                    // Stop and remove existing container if it exists
-                    sh """
-                    if [ \$(docker ps -q -f name=${CONTAINER_NAME}) ]; then
-                      docker stop ${CONTAINER_NAME}
-                    fi
-                    if [ \$(docker ps -aq -f name=${CONTAINER_NAME}) ]; then
-                      docker rm ${CONTAINER_NAME}
-                    fi
-                    """
-
-                    // Pull the latest image and run container
-                    sh """
-                    docker pull ${DOCKER_IMAGE}
-                    docker run -d --name ${CONTAINER_NAME} -p 8000:8000 ${DOCKER_IMAGE}
-                    """
+                dir('back-end') {
+                    sh 'docker compose down || true'
+                    sh 'docker compose up -d'
                 }
             }
         }
@@ -65,7 +47,7 @@ pipeline {
 
     post {
         success {
-            echo '✅ Docker image built, pushed, and deployed locally!'
+            echo '✅ Build, push, and local deployment successful!'
         }
         failure {
             echo '❌ Something failed during the pipeline. Check logs.'
