@@ -3,34 +3,43 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials') // Jenkins credentials ID
-        DOCKERHUB_IMAGE = 'nolawit/laravel-backend'
-        BACKEND_DIR = 'back-end'
+        DOCKER_IMAGE = "nolawit/back-end-app"
+        DOCKER_TAG = "latest"
+        COMPOSE_FILE = "docker-compose.ci.yml"
     }
 
     stages {
-        stage('Clone Repository') {
+        stage('Checkout Code') {
             steps {
-                git url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git', branch: 'main'
+                git url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
             }
         }
 
         stage('Prepare CI Docker Compose') {
             steps {
-                dir("${BACKEND_DIR}") {
+                dir('back-end') {
                     sh '''
-                        cp docker-compose.yml docker-compose.ci.yml
+                        cp docker-compose.yml ${COMPOSE_FILE}
 
-                        awk '
-                            BEGIN { skip=0 }
-                            /^  frontend:/ { skip=1; next }
-                            skip && /^  [^ ]/ { skip=0 }
-                            !skip { print }
-                        ' docker-compose.yml > temp.yml
-                        mv temp.yml docker-compose.ci.yml
+                        # Rename containers for CI isolation
+                        sed -i 's/container_name: app/container_name: backend_ci_app/' ${COMPOSE_FILE}
+                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' ${COMPOSE_FILE}
 
-                        sed -i 's/container_name: app/container_name: backend_ci_app/' docker-compose.ci.yml
-                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' docker-compose.ci.yml
+                        # Remove frontend service
+                        sed -i '/frontend:/,/^[^ ]/d' ${COMPOSE_FILE}
+
+                        # Override app command to keep container running
+                        sed -i 's/command: .*/command: tail -f \\/dev\\/null/' ${COMPOSE_FILE}
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('back-end') {
+                    sh '''
+                        docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                     '''
                 }
             }
@@ -38,10 +47,9 @@ pipeline {
 
         stage('Start Services with Docker Compose') {
             steps {
-                dir("${BACKEND_DIR}") {
+                dir('back-end') {
                     sh '''
-                        docker-compose -f docker-compose.ci.yml down || true
-                        docker-compose -f docker-compose.ci.yml up -d --build
+                        docker-compose -f ${COMPOSE_FILE} up -d
                     '''
                 }
             }
@@ -61,31 +69,35 @@ pipeline {
 
         stage('Run Laravel Setup') {
             steps {
-                sh '''
-                    docker exec backend_ci_app bash -c "
-                        cp .env.example .env &&
-                        php artisan key:generate &&
-                        php artisan migrate
-                    "
-                '''
+                dir('back-end') {
+                    sh '''
+                        docker exec backend_ci_app composer install
+                        docker exec backend_ci_app cp .env.example .env
+                        docker exec backend_ci_app php artisan key:generate
+                        docker exec backend_ci_app php artisan migrate
+                    '''
+                }
             }
         }
 
         stage('Run Tests') {
             steps {
-                sh 'docker exec backend_ci_app bash -c "php artisan test || true"'
+                dir('back-end') {
+                    sh '''
+                        docker exec backend_ci_app php artisan test
+                    '''
+                }
             }
         }
 
         stage('Push Image to Docker Hub') {
             steps {
-                script {
-                    def imageTag = "${DOCKERHUB_IMAGE}:latest"
-                    sh """
-                        docker tag ci-cd-test_app ${imageTag}
-                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u "${DOCKERHUB_CREDENTIALS_USR}" --password-stdin
-                        docker push ${imageTag}
-                    """
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    '''
                 }
             }
         }
@@ -93,8 +105,10 @@ pipeline {
 
     post {
         always {
-            dir("${BACKEND_DIR}") {
-                sh 'docker-compose -f docker-compose.ci.yml down || true'
+            dir('back-end') {
+                sh '''
+                    docker-compose -f ${COMPOSE_FILE} down
+                '''
             }
         }
     }
