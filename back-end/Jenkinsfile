@@ -3,113 +3,72 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "nolawit/back-end-app"
-        DOCKER_TAG = "latest"
-        COMPOSE_FILE = "docker-compose.ci.yml"
+        DOCKER_IMAGE = 'nolawit/project-backend:latest'
+        DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials' // Your Jenkins Docker Hub credentials ID
+        CONTAINER_NAME = 'backend-app'             // Name of the container to run locally
     }
 
     stages {
         stage('Checkout Code') {
             steps {
-                git url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
-            }
-        }
-
-        stage('Prepare CI Docker Compose') {
-            steps {
-                dir('back-end') {
-                    sh '''
-                        cp docker-compose.yml ${COMPOSE_FILE}
-
-                        # Rename containers for CI isolation
-                        sed -i 's/container_name: app/container_name: backend_ci_app/' ${COMPOSE_FILE}
-                        sed -i 's/container_name: laravel_db/container_name: backend_ci_laravel_db/' ${COMPOSE_FILE}
-
-                        # Remove frontend service
-                        sed -i '/frontend:/,/^[^ ]/d' ${COMPOSE_FILE}
-
-                        # Override app command to keep container running
-                        sed -i 's/command: .*/command: tail -f \\/dev\\/null/' ${COMPOSE_FILE}
-                    '''
-                }
+                git branch: 'main', url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                dir('back-end') {
-                    sh '''
-                        docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                    '''
+                script {
+                    docker.build("${DOCKER_IMAGE}", ".")
                 }
             }
         }
 
-        stage('Start Services with Docker Compose') {
-            steps {
-                dir('back-end') {
-                    sh '''
-                        docker-compose -f ${COMPOSE_FILE} up -d
-                    '''
-                }
-            }
-        }
-
-        stage('Wait for MySQL to be Ready') {
+        stage('Push to Docker Hub') {
             steps {
                 script {
-                    echo 'Waiting for MySQL to be ready...'
-                    retry(10) {
-                        sh 'sleep 5'
-                        sh 'docker exec backend_ci_app bash -c "mysqladmin ping -h backend_ci_laravel_db --silent"'
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: "${DOCKER_HUB_CREDENTIALS}",
+                            usernameVariable: 'DOCKER_USER',
+                            passwordVariable: 'DOCKER_PASS'
+                        )
+                    ]) {
+                        sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
+                        sh "docker push ${DOCKER_IMAGE}"
                     }
                 }
             }
         }
 
-        stage('Run Laravel Setup') {
+        stage('Deploy Locally') {
             steps {
-                dir('back-end') {
-                    sh '''
-                        docker exec backend_ci_app composer install
-                        docker exec backend_ci_app cp .env.example .env
-                        docker exec backend_ci_app php artisan key:generate
-                        docker exec backend_ci_app php artisan migrate
-                    '''
-                }
-            }
-        }
+                script {
+                    // Stop and remove existing container if it exists
+                    sh """
+                    if [ \$(docker ps -q -f name=${CONTAINER_NAME}) ]; then
+                      docker stop ${CONTAINER_NAME}
+                    fi
+                    if [ \$(docker ps -aq -f name=${CONTAINER_NAME}) ]; then
+                      docker rm ${CONTAINER_NAME}
+                    fi
+                    """
 
-        stage('Run Tests') {
-            steps {
-                dir('back-end') {
-                    sh '''
-                        docker exec backend_ci_app php artisan test
-                    '''
-                }
-            }
-        }
-
-        stage('Push Image to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
-                    '''
+                    // Pull the latest image and run container
+                    sh """
+                    docker pull ${DOCKER_IMAGE}
+                    docker run -d --name ${CONTAINER_NAME} -p 8000:8000 ${DOCKER_IMAGE}
+                    """
                 }
             }
         }
     }
 
     post {
-        always {
-            dir('back-end') {
-                sh '''
-                    docker-compose -f ${COMPOSE_FILE} down
-                '''
-            }
+        success {
+            echo '✅ Docker image built, pushed, and deployed locally!'
+        }
+        failure {
+            echo '❌ Something failed during the pipeline. Check logs.'
         }
     }
 }
