@@ -1,36 +1,31 @@
-
 pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = 'nolawit/project-backend:latest'
-        DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials' // Jenkins credential ID for Docker Hub
+        DOCKER_HUB_REPO = 'nolawit/project-backend'
+        DOCKER_TAG = 'latest'
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/nolawit-fant/fullstack-CI-CD.git'
+                git 'https://github.com/your-user/your-laravel-repo.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                dir('back-end') {
-                    script {
-                        docker.build("${DOCKER_IMAGE}", ".")
-                    }
+                dir('.') {
+                    sh 'docker build -t $DOCKER_HUB_REPO:$DOCKER_TAG -f back-end/Dockerfile back-end'
                 }
             }
         }
 
         stage('Push to Docker Hub') {
             steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
-                        sh "docker push ${DOCKER_IMAGE}"
-                    }
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                    sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    sh 'docker push $DOCKER_HUB_REPO:$DOCKER_TAG'
                 }
             }
         }
